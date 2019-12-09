@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import numpy as np
+import src.utils as utils
 import itertools
 import torch
 from PIL import Image
@@ -38,44 +39,55 @@ class PBSKidsDataset():
         install_ids = df.installation_id.unique()
 
         for install_id in install_ids:
-            data_filter = {"min_session_events": self._kwargs.get("min_session_events", 1)}
-            user_data = self.filter_userdata(df, install_id, data_filter)
+            user_data = df
 
             session_break_idxs = np.array(user_data[(user_data["game_time"] == 0)].index.append(user_data.tail(1).index))
 
             gameplay, accuracy_groups = self.process_gameplay(user_data, session_break_idxs)
             if gameplay:
-                self._users_data.append({"install_id": install_id,
-                                         "gameplay": gameplay,
-                                         "accuracy_groups": accuracy_groups})
+                self.data.append({"install_id": install_id,
+                                  "gameplay": gameplay,
+                                  "accuracy_groups": accuracy_groups})
         return []
 
     @staticmethod
-    def filter_userdata(df, install_id, data_filters={}):
-        user_data = df[(df["installation_id"] == install_id)]
-        # clear misclicked events
-        user_data = user_data[(user_data["event_count"] != user_data["event_count"].shift(-1))]
+    def get_accuracy(df, filter_events=None):
 
-        for key, val in data_filters.items():
-            if key == "min_session_events" and val > 1:
-                session_break_idxs = np.array(user_data[(user_data["game_time"] == 0)].index.append(user_data.tail(1).index))
-                session_lengths = np.roll(session_break_idxs, -1) - session_break_idxs + 1
-                invalid_ranges = list(zip(session_break_idxs[np.flatnonzero(session_lengths[:-1] < val)],
-                                          session_break_idxs[np.flatnonzero(session_lengths[:-1] < val) + 1] + 1))
-                invalid_rows = list(itertools.chain(*[list(range(*range_)) for range_ in invalid_ranges]))
-                user_data = user_data.drop(invalid_rows)
+        assessments = df[(df["type"]) == "Assessment"]
+        if filter_events is not None:
+            assessments = assessments[(assessments["event_data"].str.contains("correct")) &
+                                    (assessments["event_code"].isin(filter_events))]
+        else:
+            assessments = assessments[(assessments["event_data"].str.contains("correct"))]
 
-        return user_data
+        assessments["correct"] = False
+        assessments.loc[(assessments["event_data"].str.contains("true")), "correct"] = True
+        session_ids = assessments["game_session"].unique()
+        accuracy_group = np.zeros_like(session_ids, dtype=int)
+
+        for i, session_id in enumerate(session_ids):
+            trues_count = assessments[(assessments["game_session"] == session_id)]["correct"].sum()
+            false_count = (~assessments[(assessments["game_session"] == session_id)]["correct"]).sum()
+            accuracy = trues_count / (trues_count + false_count)
+
+            if accuracy == 0:
+                accuracy_group[i] = 0
+            elif 0 < accuracy < 0.5:
+                accuracy_group[i] = 1
+            elif 0.5 <= accuracy < 1:
+                accuracy_group[i] = 2
+            elif accuracy == 1:
+                accuracy_group[i] = 3
+        return pd.DataFrame({"game_session": session_ids, "accuracy_group": accuracy_group})
 
     def encode_event(self, event_data):
         # todo: implement
-        pd_timestamp = pd.Timestamp(event_data["timestamp"])
-        day_of_week = pd_timestamp.dayofweek
-        time_of_day = pd_timestamp.hour * 60 * 60 + pd_timestamp.minute * 60 + pd_timestamp.second
-        title_encode = self.one_hot_encode(ENUMS.TITLES.index(event_data["title"]), ENUMS.TITLES.__len__())
-        type_encode = self.one_hot_encode(ENUMS.TYPES.index(event_data["type"]), ENUMS.TYPES.__len__())
-        world_encode = self.one_hot_encode(ENUMS.WORLDS.index(event_data["world"]), ENUMS.WORLDS.__len__())
-        code_encode = self.one_hot_encode(ENUMS.EVENT_CODES.index(event_data["event_code"]), ENUMS.EVENT_CODES.__len__())
+        day_of_week = utils.time_of_day(event_data["timestamp"])
+        time_of_day = utils.day_of_week(event_data["timestamp"])
+        title_encode = utils.one_hot_encode(ENUMS.TITLES.index(event_data["title"]), ENUMS.TITLES.__len__())
+        type_encode = utils.one_hot_encode(ENUMS.TYPES.index(event_data["type"]), ENUMS.TYPES.__len__())
+        world_encode = utils.one_hot_encode(ENUMS.WORLDS.index(event_data["world"]), ENUMS.WORLDS.__len__())
+        code_encode = utils.one_hot_encode(ENUMS.EVENT_CODES.index(event_data["event_code"]), ENUMS.EVENT_CODES.__len__())
         event_count = event_data["event_count"]
         game_time = event_data["game_time"]
 
@@ -83,10 +95,7 @@ class PBSKidsDataset():
         return encoding
 
     @staticmethod
-    def one_hot_encode(val, max_val):
-        encode = np.zeros(max_val)
-        encode[val] = 1.0
-        return encode
+
 
     def get_accuracy_groups(self, event_data):
         # todo: implement
