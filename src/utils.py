@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
-
+import json
+import os
 
 def delta_time(t0, t1):
     dt = pd.Timestamp(t1) - pd.Timestamp(t0)
@@ -23,3 +24,20 @@ def one_hot_encode(val, max_val):
     encode = np.zeros(max_val)
     encode[val] = 1.0
     return encode
+
+
+def read_json(fpath):
+    data = None
+    try:
+        with open(fpath, "r") as stream:
+            data = json.load(stream)
+    except FileNotFoundError:
+        pass
+    return data
+
+
+def write_json(fpath, data):
+    dpath = os.path.dirname(fpath)
+    os.makedirs(name=dpath, exist_ok=True)
+    with open(fpath, "w") as file:
+        json.dump(data, file)
