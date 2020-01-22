@@ -3,6 +3,7 @@ import numpy as np
 import json
 import os
 
+
 def delta_time(t0, t1):
     dt = pd.Timestamp(t1) - pd.Timestamp(t0)
     if dt.days >= 0:
